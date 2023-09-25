@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 
-import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+import { GUI } from 'dat.gui'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Mesh } from 'three';
 
-let camera, scene, renderer, controls, shaderMaterial, orthoCamera;
+let activeCamera, camera, scene, renderer, controls, shaderMaterial, orthoCamera, light;
 let supportsExtension = true;
 let textures = [];
 
@@ -46,13 +46,13 @@ const fragShader = `
                 switch(i) {
                     // we are not allowed to use i as index to access texture in array in current version of GLSL
                     ${new Array(n)
-                      .fill(0)
-                      .map((_, i) => makeSwitchCase(i))
-                      .join('')}
+        .fill(0)
+        .map((_, i) => makeSwitchCase(i))
+        .join('')}
                     default: break;
                   }
             }
-            return a/${n+'.0'};
+            return a/${n + '.0'};
         }
         void main() {
             //vec3 diffuse = texture2D( tDiffuse, vUv ).rgb;
@@ -64,8 +64,9 @@ const fragShader = `
             //gl_FragColor.a = 1.0;
         }`
 
-        
+
 init();
+initGUI();
 animate();
 
 
@@ -87,27 +88,39 @@ function init() {
     window.addEventListener('resize', onWindowResize);
 }
 
+function initGUI() {
+    var gui = new GUI();
+    gui.add(camera, 'visible', true);
+    const lightFolder = gui.addFolder('Light')
+    lightFolder.add(light.position, 'x', -10, 10)
+    lightFolder.add(light.position, 'y',-10, 10)
+    lightFolder.add(light.position, 'z', -10, 10)
+    lightFolder.open()
+}
+
+
 function setupScene() {
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
+    scene.background = new THREE.Color(0xffffff);
 
     camera = new THREE.PerspectiveCamera(70, 1, 0.01, 50);
     camera.position.z = 4;
     camera.position.set(0, 0, 10);
     camera.lookAt(0, 0, 0);
+    activeCamera = camera;
 
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
     setupOrtho();
-    
+
     shaderMaterial = new THREE.ShaderMaterial({
         vertexShader: document.querySelector('#post-vert').textContent.trim(),
         fragmentShader: fragShader,
         uniforms: {
-            cameraNear: { value: orthoCamera.near },
-            cameraFar: { value: orthoCamera.far },
+            cameraNear: { value: light.shadow.camera.near },
+            cameraFar: { value: light.shadow.camera.far },
             tDiffuse: { value: null },
             tDepth: { value: textures }
         },
@@ -118,24 +131,30 @@ function setupScene() {
 
     const roofGeo = new THREE.PlaneGeometry(10, 10, 10);
     const obsGeo = new THREE.PlaneGeometry(5, 5, 5);
-    const blueMaterial = new THREE.MeshBasicMaterial({ color: 'blue' });
+    const blueMaterial = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide })
     const roof = new Mesh(roofGeo, blueMaterial)
     const obstacle = new Mesh(obsGeo, blueMaterial)
 
-    obstacle.position.set(0,0,5)
+    obstacle.position.set(0, 0, 5)
 
     scene.add(roof)
     scene.add(obstacle)
-
+    light.target = obstacle;
+    light.shadow.camera.target = obstacle;
     getDepthTexture();
 
     roof.material = shaderMaterial;
 }
 
-function setupOrtho(){
-    orthoCamera = new THREE.OrthographicCamera(- 10, 10, 10, -10, 0, 10);
-    orthoCamera.position.set(0, 0, 10);
-    orthoCamera.lookAt(0, 0, 0);
+
+function setupOrtho() {
+    light = new THREE.DirectionalLight(0xffffff, 1.0);
+    light.position.set(0, 10, 10);
+    const sphere = new Mesh(new THREE.SphereGeometry(0.2, 32, 32), new THREE.MeshStandardMaterial({ side: THREE.DoubleSide }));
+    scene.add(light);
+    light.add(sphere);
+    light.shadow.camera = new THREE.OrthographicCamera(- 10, 10, 10, -10, 0, 10);
+    light.add(light.shadow.camera);
 }
 
 function onWindowResize() {
@@ -146,8 +165,6 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-
-
 function getDepthTexture() {
     let target;
     function setupRenderTarget() {
@@ -157,7 +174,7 @@ function getDepthTexture() {
         const format = parseFloat(params.format);
         const type = parseFloat(params.type);
 
-        target = new THREE.WebGLRenderTarget(512, 512);
+        target = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
         target.texture.minFilter = THREE.NearestFilter;
         target.texture.magFilter = THREE.NearestFilter;
         target.stencilBuffer = false;
@@ -165,20 +182,36 @@ function getDepthTexture() {
         target.depthTexture.format = format;
         target.depthTexture.type = type;
 
+        light.shadow.map = target;
     }
     setupRenderTarget();
 
-    renderer.setRenderTarget(target);
-    renderer.render(scene, orthoCamera);
+    renderer.setRenderTarget(light.shadow.map);
+    renderer.render(scene, light.shadow.camera);
+    
     textures.push(new THREE.Texture().copy(target.depthTexture));
     renderer.setRenderTarget(null);
 }
 
+function toogleCamera() {
+    if (activeCamera === camera) {
+        activeCamera = light.shadow.camera
+    }
+    else {
+        activeCamera = camera
+    }
+}
+
 function animate() {
+    if (camera.visible) {
+        activeCamera = camera;
+    } else {
+        activeCamera = light.shadow.camera;
+    }
 
     if (!supportsExtension) return;
     requestAnimationFrame(animate);
-    renderer.render(scene, camera);
+    renderer.render(scene, activeCamera);
     controls.update();
 }
 
